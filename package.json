@@ -1,0 +1,19 @@
+{
+  "name": "launchpad",
+  "private": true,
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "bootstrap": "pnpm --filter @launchpad/types build && pnpm --filter @launchpad/db build",
+    "dev": "pnpm run bootstrap && turbo dev",
+    "build": "pnpm run bootstrap && turbo build",
+    "typecheck": "pnpm run bootstrap && turbo typecheck",
+    "lint": "pnpm run bootstrap && turbo lint",
+    "db:generate": "pnpm --filter @launchpad/db prisma:generate",
+    "db:migrate": "pnpm --filter @launchpad/db prisma:migrate",
+    "db:studio": "pnpm --filter @launchpad/db prisma:studio"
+  },
+  "devDependencies": {
+    "turbo": "^2.3.3",
+    "typescript": "^5.7.2"
+  }
+}
