@@ -4,8 +4,8 @@ import path from "path";
 
 import { ApiError } from "../../lib/api-error";
 
-type PackageManager = "npm" | "pnpm" | "yarn";
-type SupportedFramework = "nextjs" | "react" | "node";
+type PackageManager = "npm" | "pnpm" | "yarn" | "pip";
+type SupportedFramework = "nextjs" | "react" | "node" | "python" | "static";
 
 type PackageJson = {
   scripts?: Record<string, string | undefined>;
@@ -17,10 +17,10 @@ export type BuildPlan = {
   framework: SupportedFramework;
   packageManager: PackageManager;
   workingDirectory: string;
-  installCommand: string;
+  installCommand: string | null;
   buildCommand: string | null;
   startCommand: string;
-  runtimeType: "node" | "static";
+  runtimeType: "node" | "static" | "python";
   outputDirectory: string | null;
   containerPort: number;
 };
@@ -43,13 +43,15 @@ function getInstallCommand(packageManager: PackageManager) {
       return "corepack enable && pnpm install --frozen-lockfile";
     case "yarn":
       return "corepack enable && (yarn install --frozen-lockfile || yarn install --immutable)";
+    case "pip":
+      return "if [ -f requirements.txt ]; then pip install --no-cache-dir -r requirements.txt; fi";
     case "npm":
     default:
       return "if [ -f package-lock.json ]; then npm ci; else npm install; fi";
   }
 }
 
-function runPackageScript(packageManager: PackageManager, script: string) {
+function runPackageScript(packageManager: Exclude<PackageManager, "pip">, script: string) {
   switch (packageManager) {
     case "pnpm":
       return `pnpm run ${script}`;
@@ -59,6 +61,26 @@ function runPackageScript(packageManager: PackageManager, script: string) {
     default:
       return `npm run ${script}`;
   }
+}
+
+function detectPythonStartCommand(projectRoot: string) {
+  if (existsSync(path.join(projectRoot, "manage.py"))) {
+    return "python manage.py runserver 0.0.0.0:3000";
+  }
+
+  if (existsSync(path.join(projectRoot, "main.py"))) {
+    return "python -m uvicorn main:app --host 0.0.0.0 --port 3000 || python main.py";
+  }
+
+  if (existsSync(path.join(projectRoot, "app.py"))) {
+    return "python -m uvicorn app:app --host 0.0.0.0 --port 3000 || python app.py";
+  }
+
+  throw new ApiError(
+    400,
+    "UNSUPPORTED_FRAMEWORK",
+    "Python deployments require manage.py, main.py, or app.py in the configured root directory."
+  );
 }
 
 export function resolveRootDirectory(repositoryRoot: string, rootDir: string) {
@@ -87,6 +109,41 @@ export async function detectBuildPlan({
 }): Promise<BuildPlan> {
   const { resolvedRoot, normalizedRootDir } = resolveRootDirectory(repositoryRoot, rootDir);
   const packageJsonPath = path.join(resolvedRoot, "package.json");
+  const hasPackageJson = existsSync(packageJsonPath);
+  const preferredFramework = configuredFramework.toLowerCase();
+
+  const hasStaticIndex = existsSync(path.join(resolvedRoot, "index.html"));
+  const hasPythonManifest =
+    existsSync(path.join(resolvedRoot, "requirements.txt")) ||
+    existsSync(path.join(resolvedRoot, "pyproject.toml"));
+
+  if ((hasStaticIndex && !hasPackageJson) || preferredFramework === "static") {
+    return {
+      framework: "static",
+      packageManager: "npm",
+      workingDirectory: normalizedRootDir,
+      installCommand: null,
+      buildCommand: null,
+      startCommand: "serve -s /app/public -l 3000",
+      runtimeType: "static",
+      outputDirectory: ".",
+      containerPort: 3000
+    };
+  }
+
+  if (hasPythonManifest || preferredFramework === "python") {
+    return {
+      framework: "python",
+      packageManager: "pip",
+      workingDirectory: normalizedRootDir,
+      installCommand: getInstallCommand("pip"),
+      buildCommand: null,
+      startCommand: detectPythonStartCommand(resolvedRoot),
+      runtimeType: "python",
+      outputDirectory: null,
+      containerPort: 3000
+    };
+  }
 
   try {
     await access(packageJsonPath);
@@ -94,7 +151,7 @@ export async function detectBuildPlan({
     throw new ApiError(
       400,
       "UNSUPPORTED_FRAMEWORK",
-      "Launchpad could not find a package.json in the configured root directory."
+      "Launchpad could not find a supported app entrypoint in the configured root directory."
     );
   }
 
@@ -104,8 +161,7 @@ export async function detectBuildPlan({
     ...packageJson.devDependencies
   };
   const scripts = packageJson.scripts ?? {};
-  const packageManager = getPackageManager(resolvedRoot);
-  const preferredFramework = configuredFramework.toLowerCase();
+  const packageManager = getPackageManager(resolvedRoot) as Exclude<PackageManager, "pip">;
 
   const hasNext =
     Boolean(dependencies.next) ||
@@ -177,28 +233,49 @@ export async function detectBuildPlan({
   throw new ApiError(
     400,
     "UNSUPPORTED_FRAMEWORK",
-    "Launchpad currently supports Next.js, React static builds, and Node.js projects with a start script."
+    "Launchpad currently supports Next.js, React static builds, Node.js apps, raw static sites, and common Python entrypoints."
   );
 }
 
 export function createDockerfile(plan: BuildPlan) {
   const workingDirectory = plan.workingDirectory === "." ? "/workspace" : `/workspace/${plan.workingDirectory}`;
 
-  const builderLines = [
-    "FROM node:20-alpine AS builder",
-    "WORKDIR /workspace",
-    "COPY . .",
-    `WORKDIR ${workingDirectory}`,
-    `RUN ${plan.installCommand}`
-  ];
+  if (plan.runtimeType === "python") {
+    const lines = [
+      "FROM python:3.11-alpine",
+      "WORKDIR /workspace",
+      "COPY . .",
+      `WORKDIR ${workingDirectory}`,
+      "ENV PYTHONDONTWRITEBYTECODE=1",
+      "ENV PYTHONUNBUFFERED=1"
+    ];
+
+    if (plan.installCommand) {
+      lines.push(`RUN ${plan.installCommand}`);
+    }
+
+    lines.push(`EXPOSE ${plan.containerPort}`);
+    lines.push(`CMD ["sh", "-c", "${plan.startCommand}"]`);
+
+    return `${lines.join("\n")}\n`;
+  }
+
+  const builderLines = ["FROM node:20-alpine AS builder", "WORKDIR /workspace", "COPY . ."];
+
+  if (plan.installCommand) {
+    builderLines.push(`WORKDIR ${workingDirectory}`, `RUN ${plan.installCommand}`);
+  }
 
   if (plan.buildCommand) {
     builderLines.push(`RUN ${plan.buildCommand}`);
   }
 
   if (plan.runtimeType === "static") {
+    const outputDirectory =
+      plan.outputDirectory === "." ? workingDirectory : `${workingDirectory}/${plan.outputDirectory}`;
+
     builderLines.push("", "FROM node:20-alpine AS runner", "WORKDIR /app", "RUN npm install -g serve");
-    builderLines.push(`COPY --from=builder ${workingDirectory}/${plan.outputDirectory} ./public`);
+    builderLines.push(`COPY --from=builder ${outputDirectory} ./public`);
     builderLines.push(`EXPOSE ${plan.containerPort}`);
     builderLines.push(`CMD ["sh", "-c", "${plan.startCommand}"]`);
     return `${builderLines.join("\n")}\n`;

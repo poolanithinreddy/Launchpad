@@ -29,6 +29,9 @@ type GitHubRepoResponse = Array<{
   html_url: string;
   default_branch: string;
   private: boolean;
+  description: string | null;
+  language: string | null;
+  stargazers_count: number;
   updated_at: string;
 }>;
 
@@ -116,9 +119,18 @@ export async function fetchGitHubProfile(accessToken: string) {
   };
 }
 
-export async function fetchGitHubRepos(accessToken: string) {
+export async function fetchGitHubRepos(
+  accessToken: string,
+  {
+    page = 1,
+    perPage = 30
+  }: {
+    page?: number;
+    perPage?: number;
+  } = {}
+) {
   const repos = await githubFetch<GitHubRepoResponse>(
-    "/user/repos?sort=updated&per_page=100&affiliation=owner,collaborator,organization_member",
+    `/user/repos?sort=updated&per_page=${perPage}&page=${page}&affiliation=owner,collaborator,organization_member`,
     accessToken
   );
 
@@ -129,6 +141,9 @@ export async function fetchGitHubRepos(accessToken: string) {
     url: repo.html_url,
     defaultBranch: repo.default_branch,
     private: repo.private,
+    description: repo.description,
+    language: repo.language,
+    stargazerCount: repo.stargazers_count,
     updatedAt: repo.updated_at
   }));
 }
