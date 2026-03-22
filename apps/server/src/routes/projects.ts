@@ -1,5 +1,7 @@
+import { randomBytes } from "crypto";
+
 import { prisma } from "@launchpad/db";
-import type { Router } from "express";
+import type { Request, Router } from "express";
 import { Router as createRouter } from "express";
 
 import { asyncHandler } from "../lib/async-handler";
@@ -12,6 +14,17 @@ import { findOwnedProject, toEnvVarDto, toProjectDto } from "../services/project
 export const projectsRouter: Router = createRouter();
 
 projectsRouter.use(authenticateRequest);
+
+function getRequestBaseUrl(req: Request) {
+  const protocol = req.get("x-forwarded-proto") ?? req.protocol;
+  const host = req.get("x-forwarded-host") ?? req.get("host");
+
+  if (!host) {
+    throw new ApiError(500, "INVALID_REQUEST_HOST", "Request host is unavailable.");
+  }
+
+  return `${protocol}://${host}`;
+}
 
 projectsRouter.get(
   "/",
@@ -209,6 +222,47 @@ projectsRouter.delete(
     return res.json({
       data: {
         success: true
+      }
+    });
+  })
+);
+
+projectsRouter.get(
+  "/:id/webhook-info",
+  asyncHandler(async (req, res) => {
+    const projectId = String(req.params.id);
+    const project = await findOwnedProject(projectId, req.user.id);
+
+    return res.json({
+      data: {
+        webhookUrl: `${getRequestBaseUrl(req)}/webhooks/github/${project.id}`,
+        webhookSecret: project.webhookSecret,
+        events: ["push"]
+      }
+    });
+  })
+);
+
+projectsRouter.put(
+  "/:id/webhook-secret",
+  asyncHandler(async (req, res) => {
+    const projectId = String(req.params.id);
+    await findOwnedProject(projectId, req.user.id);
+
+    const project = await prisma.project.update({
+      where: {
+        id: projectId
+      },
+      data: {
+        webhookSecret: randomBytes(24).toString("hex")
+      }
+    });
+
+    return res.json({
+      data: {
+        webhookUrl: `${getRequestBaseUrl(req)}/webhooks/github/${project.id}`,
+        webhookSecret: project.webhookSecret,
+        events: ["push"]
       }
     });
   })
