@@ -66,8 +66,11 @@ model Deployment {
   containerId     String?
   imageTag        String?
   framework       String           @default("other")
+  sourceBranch    String?
   sourceCommitSha String?
+  commitMessage   String?
   errorMessage    String?
+  aiAnalysis      String?
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
   startedAt       DateTime?
