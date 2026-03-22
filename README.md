@@ -1,233 +1,131 @@
-# Launchpad Phase 2
+# Launchpad
 
-Launchpad is a self-hosted deployment platform for Nithin Reddy Poola. Phase 2 extends the Phase 1 authenticated product shell with queued deployments, a Redis-backed BullMQ worker, Docker-based builds, framework detection, local preview URLs, and deployment history.
+> A self-hosted cloud deployment platform. Connect a GitHub repo, push code, and get a live preview URL with real-time build logs, AI-powered failure analysis, and a polished dashboard.
 
-## Stack
+Built by **Nithin Reddy Poola** — MS CS @ UMBC
 
-- Turborepo + pnpm workspaces
-- `apps/web`: Next.js 14 App Router, TypeScript, Tailwind CSS, shadcn-style UI, TanStack Query, axios
-- `apps/server`: Express, TypeScript, Prisma, BullMQ, Docker worker integration
-- `packages/db`: Prisma schema, generated Prisma client wrapper, SQL migrations
-- `packages/types`: shared DTOs and deployment types
-- PostgreSQL 15 + Redis 7 via `docker-compose.yml`
+## Live Demo
+[https://launchpad-demo.up.railway.app](https://launchpad-demo.up.railway.app)
 
-## Repo Structure
+![Dashboard screenshot placeholder](https://placehold.co/1200x675?text=Launchpad+Dashboard)
 
-```text
-Launchpad/
-├── apps/
-│   ├── server/
-│   └── web/
-├── packages/
-│   ├── db/
-│   └── types/
-├── docker-compose.yml
-├── package.json
-├── pnpm-workspace.yaml
-├── turbo.json
-└── README.md
-```
+## What it does
+- Connect any GitHub repository and deploy it in one click
+- Real-time build logs stream to your browser as Docker builds your app
+- AI explains what went wrong when a build fails
+- GitHub webhooks auto-trigger deployments on every push
+- Analytics dashboards track deployment history and build performance
 
-## Phase 2 Features
+## Architecture
 
-- GitHub OAuth with backend-issued `httpOnly` JWT cookies
-- Protected dashboard and project management
-- Deployment model and deployment history
-- Redis-backed BullMQ deployment queue
-- Dedicated deployment worker process
-- Docker-based repo build and runtime provisioning
-- Framework detection for Next.js, React static builds, and Node.js apps with a start script
-- Local preview URL creation on configurable host ports
-- Deployment status transitions:
-  `QUEUED`, `CLONING`, `DETECTING`, `BUILDING`, `STARTING`, `READY`, `FAILED`, `STOPPED`
+Launchpad clones a GitHub repository, detects a supported framework, builds it into an isolated Docker image, starts a preview container on a local port, and surfaces the result in a web dashboard. Deployment work runs through a Redis-backed BullMQ queue so the API server stays responsive while builds are executing. Docker build output is persisted to MongoDB when available and broadcast to browsers over Socket.io in real time. Failed deployments can be summarized by Azure OpenAI or the OpenAI API using the latest saved log lines.
 
-## Environment Setup
+### Key engineering decisions
+| Decision | Why |
+|---|---|
+| Isolated Docker images and containers per deployment | Prevents one build from polluting another preview runtime |
+| Redis + BullMQ job queue | Handles deployment work asynchronously without blocking the API |
+| Socket.io for live terminal output | Streams deployment logs to the browser without polling |
+| MongoDB for build log persistence | Stores append-heavy deployment logs independently from the relational data model |
+| PostgreSQL + Prisma for product data | Keeps auth, projects, deployments, and settings strongly typed and relational |
+| Optional AI failure analysis | Turns the last 50 error lines into actionable explanations when API keys are configured |
 
-1. Copy the env files:
+## Tech stack
+| Layer | Tech |
+|---|---|
+| Frontend | Next.js 14, TypeScript, Tailwind CSS, TanStack Query, Recharts, Socket.io-client |
+| Backend | Node.js, Express, TypeScript, Prisma, BullMQ, Socket.io, Mongoose |
+| Build engine | Docker CLI, git |
+| AI analysis | Azure OpenAI or OpenAI Chat Completions |
+| Databases | PostgreSQL, MongoDB, Redis |
+| Infrastructure | Docker Compose, Turborepo, pnpm workspaces |
 
+## Getting started
+
+### Prerequisites
+- Node.js 20+
+- pnpm (`npm install -g pnpm`)
+- Docker Desktop running locally
+
+### Setup
 ```bash
+git clone https://github.com/poolanithinreddy/Launchpad.git
+cd Launchpad
+pnpm install
 cp apps/server/.env.example apps/server/.env
 cp apps/web/.env.local.example apps/web/.env.local
-```
-
-2. Fill in GitHub OAuth values in `apps/server/.env`:
-
-```env
-GITHUB_CLIENT_ID=your_github_oauth_app_client_id
-GITHUB_CLIENT_SECRET=your_github_oauth_app_client_secret
-GITHUB_REDIRECT_URI=http://localhost:4000/auth/github/callback
-```
-
-3. Review the deployment/queue settings in `apps/server/.env`:
-
-```env
-REDIS_URL=redis://localhost:6379
-PREVIEW_HOST=localhost
-PREVIEW_PROTOCOL=http
-PREVIEW_PORT_RANGE_START=3100
-PREVIEW_PORT_RANGE_END=3199
-```
-
-## Setup Commands
-
-Install dependencies:
-
-```bash
-pnpm install
-```
-
-Start PostgreSQL and Redis:
-
-```bash
+# Add your GitHub OAuth credentials to apps/server/.env
 docker compose up -d
-```
-
-## Migration Commands
-
-Generate Prisma client:
-
-```bash
-pnpm run db:generate
-```
-
-Apply migrations:
-
-```bash
 pnpm run db:migrate
+pnpm dev
 ```
 
-Open Prisma Studio:
+Open `http://localhost:3000`.
 
-```bash
-pnpm run db:studio
-```
+### Environment variables
 
-## Run Commands
+#### Server
+| Variable | Required | Description |
+|---|---|---|
+| `NODE_ENV` | No | Runtime mode. Defaults to `development`. |
+| `PORT` | No | Express API port. Defaults to `4000`. |
+| `FRONTEND_URL` | Yes | Allowed frontend origin for CORS and auth redirects. |
+| `JWT_SECRET` | Yes | Secret used to sign the Launchpad session cookie JWT. |
+| `JWT_EXPIRES_IN` | Yes | JWT lifetime, for example `7d`. |
+| `GITHUB_CLIENT_ID` | Yes | GitHub OAuth App client ID. |
+| `GITHUB_CLIENT_SECRET` | Yes | GitHub OAuth App client secret. |
+| `GITHUB_REDIRECT_URI` | Yes | GitHub OAuth callback URL. |
+| `DATABASE_URL` | Yes | PostgreSQL connection string for Prisma. |
+| `REDIS_URL` | Yes | Redis connection string for BullMQ and deployment event fan-out. |
+| `MONGODB_URI` | No | MongoDB connection string for build log persistence. If MongoDB is unavailable, Launchpad keeps deploying without saved logs. |
+| `OPENAI_API_KEY` | No | Standard OpenAI API key for failure analysis. |
+| `AZURE_OPENAI_KEY` | No | Azure OpenAI API key. Takes priority over `OPENAI_API_KEY`. |
+| `AZURE_OPENAI_ENDPOINT` | No | Azure OpenAI resource endpoint, for example `https://your-resource.openai.azure.com`. |
+| `AZURE_OPENAI_DEPLOYMENT` | No | Azure OpenAI deployment name used for chat completions. |
+| `AZURE_CONTAINER_REGISTRY_URL` | No | Reserved environment slot if you later extend Launchpad toward registry-backed image publishing. |
+| `PREVIEW_HOST` | No | Host used to construct local preview URLs. |
+| `PREVIEW_PROTOCOL` | No | Preview URL scheme, `http` or `https`. |
+| `PREVIEW_PORT_RANGE_START` | No | First allocatable local preview port. |
+| `PREVIEW_PORT_RANGE_END` | No | Last allocatable local preview port. |
 
-Run the full workspace in development:
+#### Web
+| Variable | Required | Description |
+|---|---|---|
+| `NEXT_PUBLIC_API_URL` | Yes | Base URL for the Launchpad API. |
+| `NEXT_PUBLIC_SOCKET_URL` | Yes | Base URL for the Socket.io server used for live build logs. |
+
+## Development workflow
 
 ```bash
 pnpm dev
 ```
 
-Run only the API server:
+Useful commands:
 
 ```bash
-pnpm --filter @launchpad/server dev:api
+pnpm run typecheck
+pnpm run build
+pnpm run db:migrate
+docker compose up -d
 ```
 
-Run only the deployment worker:
-
-```bash
-pnpm --filter @launchpad/server dev:worker
-```
-
-Run only the web app:
-
-```bash
-pnpm --filter @launchpad/web dev
-```
-
-Create production builds:
-
-```bash
-pnpm build
-```
-
-Run built services:
-
-```bash
-pnpm --filter @launchpad/server start
-pnpm --filter @launchpad/server start:worker
-pnpm --filter @launchpad/web start
-```
-
-## API Surface
-
-### Auth
-
-- `GET /auth/github`
-- `GET /auth/github/callback`
-- `GET /auth/me`
-- `POST /auth/logout`
-
-### Projects
-
-- `GET /api/projects`
-- `POST /api/projects`
-- `GET /api/projects/:id`
-- `PUT /api/projects/:id`
-- `DELETE /api/projects/:id`
-
-### Environment Variables
-
-- `GET /api/projects/:id/env`
-- `POST /api/projects/:id/env`
-- `DELETE /api/projects/:id/env/:envId`
-
-### Deployments
-
-- `GET /api/projects/:id/deployments`
-- `POST /api/projects/:id/deployments`
-- `GET /api/deployments/:deploymentId`
-
-### GitHub
-
-- `GET /api/github/repos`
-
-Errors use this JSON shape:
-
-```json
-{
-  "error": "message here",
-  "code": "ERROR_CODE"
-}
-```
-
-## Manual Verification Checklist
+## Manual verification
 
 1. Start Docker Desktop.
 2. Run `docker compose up -d`.
 3. Run `pnpm run db:migrate`.
 4. Run `pnpm dev`.
-5. Open `http://localhost:3000/login`.
-6. Sign in with GitHub.
-7. Confirm `/dashboard` loads and project cards render.
-8. Create or open a project.
-9. On `/project/[id]`, click `Deploy latest`.
-10. Confirm a deployment appears in history with status `QUEUED`.
-11. Confirm the worker advances the deployment through `CLONING`, `DETECTING`, `BUILDING`, and `STARTING`.
-12. Confirm the deployment reaches `READY` or `FAILED`.
-13. If it reaches `READY`, open the preview URL and confirm the app responds.
-14. Trigger another deployment and confirm history shows both runs in reverse chronological order.
-15. Confirm the previous active preview becomes `STOPPED` when a newer deployment becomes `READY`.
-16. Delete the project and confirm associated preview containers are removed.
-17. Confirm unauthenticated access to deployment routes returns `401` with the expected `{ error, code }` shape.
+5. Sign in with GitHub at `http://localhost:3000/login`.
+6. Create a project from a GitHub repository in the new project wizard.
+7. Confirm the first deployment starts automatically after project creation.
+8. Open the project page and watch logs stream in real time.
+9. Confirm a successful deployment exposes a preview URL.
+10. Configure the project webhook in GitHub and push to the configured branch.
+11. Confirm a new deployment is queued automatically.
+12. Visit `/analytics` and verify charts render against real deployment data.
 
-## What Was Verified In This Environment
-
-- `pnpm install`
-- `pnpm run typecheck`
-- `pnpm run build`
-- The built API server started on `http://localhost:4000`
-- The built web app started on `http://localhost:3000`
-- The built deployment worker started and surfaced a clear Redis connection failure when Redis was unavailable
-- `GET /api/projects/:id/deployments` returned `401` with the expected error shape when unauthenticated
-- `GET /api/deployments/:deploymentId` returned `401` with the expected error shape when unauthenticated
-- The updated project detail route responded from the built web app
-
-## Known Limitations
-
-- Full queue-backed deployment execution was not verified here because the Docker daemon was not available, so Redis/PostgreSQL containers could not be started from this environment.
-- Full GitHub OAuth callback and repo build verification still require real GitHub OAuth credentials.
-- Docker builds currently target standalone Next.js apps, standalone React static apps, and Node.js apps with a `start` script. More complex monorepo/workspace deployment topologies are not covered yet.
-- MongoDB log persistence, live log streaming, GitHub webhooks, AI failure analysis, analytics, and Azure integration are intentionally not included in Phase 2.
-
-## Phase 3 Not Yet Implemented
-
-- MongoDB build log persistence
-- frontend live log streaming
-- GitHub webhooks
-- AI failure analysis
-- analytics
-- Azure integration
+## Author
+**Nithin Reddy Poola**  
+MS Computer Science @ UMBC  
+GitHub: [@poolanithinreddy](https://github.com/poolanithinreddy)  
+LinkedIn: [linkedin.com/in/nithinreddypoola](https://linkedin.com/in/nithinreddypoola)

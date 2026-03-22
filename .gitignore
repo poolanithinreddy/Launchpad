@@ -12,6 +12,7 @@ dist
 .turbo
 .next
 coverage
+*.tsbuildinfo
 
 # misc
 .DS_Store
