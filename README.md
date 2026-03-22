@@ -5,9 +5,7 @@
 Built by **Nithin Reddy Poola** — MS CS @ UMBC
 
 ## Live Demo
-[https://launchpad-demo.up.railway.app](https://launchpad-demo.up.railway.app)
-
-![Dashboard screenshot placeholder](https://placehold.co/1200x675?text=Launchpad+Dashboard)
+![Launchpad product walkthrough](docs/launchpad-demo.gif)
 
 ## What it does
 - Connect any GitHub repository and deploy it in one click
