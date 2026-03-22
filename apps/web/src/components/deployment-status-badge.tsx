@@ -4,7 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 
 const statusStyles: Record<DeploymentStatus, string> = {
-  QUEUED: "border-amber-200 bg-amber-50 text-amber-700",
+  QUEUED: "border-slate-200 bg-slate-100 text-slate-700",
   CLONING: "border-amber-200 bg-amber-50 text-amber-700",
   DETECTING: "border-amber-200 bg-amber-50 text-amber-700",
   BUILDING: "border-amber-200 bg-amber-50 text-amber-700",
@@ -16,7 +16,7 @@ const statusStyles: Record<DeploymentStatus, string> = {
 
 export function DeploymentStatusBadge({ status }: { status: DeploymentStatus }) {
   return (
-    <Badge variant="outline" className={cn("font-medium", statusStyles[status])}>
+    <Badge variant="outline" className={cn("font-medium capitalize", statusStyles[status])}>
       {status.toLowerCase()}
     </Badge>
   );
