@@ -3,17 +3,52 @@ import { z } from "zod";
 
 config();
 
+const optionalString = z
+  .string()
+  .optional()
+  .transform((value) => {
+    const normalized = value?.trim();
+    return normalized ? normalized : undefined;
+  });
+
+const optionalUrl = z
+  .string()
+  .optional()
+  .transform((value, context) => {
+    const normalized = value?.trim();
+
+    if (!normalized) {
+      return undefined;
+    }
+
+    try {
+      return new URL(normalized).toString().replace(/\/$/, "");
+    } catch {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Invalid URL."
+      });
+      return z.NEVER;
+    }
+  });
+
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   PORT: z.coerce.number().default(4000),
   FRONTEND_URL: z.string().url(),
   DATABASE_URL: z.string().min(1),
   REDIS_URL: z.string().url(),
+  MONGODB_URI: z.string().min(1).default("mongodb://localhost:27017/launchpad"),
   JWT_SECRET: z.string().min(1),
   JWT_EXPIRES_IN: z.string().min(1),
   GITHUB_CLIENT_ID: z.string().min(1),
   GITHUB_CLIENT_SECRET: z.string().min(1),
   GITHUB_REDIRECT_URI: z.string().url(),
+  OPENAI_API_KEY: optionalString,
+  AZURE_OPENAI_KEY: optionalString,
+  AZURE_OPENAI_ENDPOINT: optionalUrl,
+  AZURE_OPENAI_DEPLOYMENT: optionalString,
+  AZURE_CONTAINER_REGISTRY_URL: optionalString,
   PREVIEW_HOST: z.string().min(1).default("localhost"),
   PREVIEW_PROTOCOL: z.enum(["http", "https"]).default("http"),
   PREVIEW_PORT_RANGE_START: z.coerce.number().int().positive().default(3100),

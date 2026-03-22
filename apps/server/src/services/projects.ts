@@ -30,8 +30,11 @@ export function toDeploymentDto(deployment: {
   previewUrl: string | null;
   previewPort: number | null;
   framework: string;
+  sourceBranch: string | null;
   sourceCommitSha: string | null;
+  commitMessage: string | null;
   errorMessage: string | null;
+  aiAnalysis: string | null;
   createdAt: Date;
   updatedAt: Date;
   startedAt: Date | null;
@@ -44,8 +47,11 @@ export function toDeploymentDto(deployment: {
     previewUrl: deployment.previewUrl,
     previewPort: deployment.previewPort,
     framework: deployment.framework,
+    sourceBranch: deployment.sourceBranch,
     sourceCommitSha: deployment.sourceCommitSha,
+    commitMessage: deployment.commitMessage,
     errorMessage: deployment.errorMessage,
+    aiAnalysis: deployment.aiAnalysis,
     createdAt: deployment.createdAt.toISOString(),
     updatedAt: deployment.updatedAt.toISOString(),
     startedAt: deployment.startedAt?.toISOString() ?? null,
@@ -87,8 +93,11 @@ export function toProjectDto(
       previewUrl: string | null;
       previewPort: number | null;
       framework: string;
+      sourceBranch: string | null;
       sourceCommitSha: string | null;
+      commitMessage: string | null;
       errorMessage: string | null;
+      aiAnalysis: string | null;
       createdAt: Date;
       updatedAt: Date;
       startedAt: Date | null;

@@ -7,22 +7,15 @@ import { prisma } from "@launchpad/db";
 
 import { ApiError } from "../../lib/api-error";
 import { runCommand } from "../../lib/run-command";
+import { analyzeFailure } from "../ai.service";
+import { appendDeploymentLogLine } from "./logs";
+import { updateDeploymentStatus } from "./records";
 import { detectBuildPlan, createDockerfile } from "./framework";
 import { allocatePreviewPort, createPreviewUrl } from "./preview";
 
 export type DeploymentJobData = {
   deploymentId: string;
 };
-
-type DeploymentStatus =
-  | "QUEUED"
-  | "CLONING"
-  | "DETECTING"
-  | "BUILDING"
-  | "STARTING"
-  | "READY"
-  | "FAILED"
-  | "STOPPED";
 
 function getContainerName(deploymentId: string) {
   return `launchpad-deployment-${deploymentId.toLowerCase()}`;
@@ -36,11 +29,7 @@ function createAuthenticatedRepoUrl(repoUrl: string, accessToken: string) {
   const parsedUrl = new URL(repoUrl);
 
   if (parsedUrl.hostname !== "github.com") {
-    throw new ApiError(
-      400,
-      "UNSUPPORTED_REPOSITORY",
-      "Launchpad Phase 2 supports GitHub repositories only."
-    );
+    throw new ApiError(400, "UNSUPPORTED_REPOSITORY", "Launchpad supports GitHub repositories only.");
   }
 
   const repoPath = parsedUrl.pathname.replace(/^\//, "").replace(/\.git$/, "");
@@ -74,12 +63,46 @@ function getDeploymentErrorMessage(error: unknown) {
   return "Deployment failed.";
 }
 
+async function streamCommandOutput(deploymentId: string, text: string) {
+  await appendDeploymentLogLine({
+    deploymentId,
+    text
+  });
+}
+
+async function runDeploymentCommand({
+  deploymentId,
+  command,
+  args,
+  cwd,
+  ignoreExitCode
+}: {
+  deploymentId: string;
+  command: string;
+  args: string[];
+  cwd?: string;
+  ignoreExitCode?: boolean;
+}) {
+  return runCommand(command, args, {
+    cwd,
+    ignoreExitCode,
+    onStdoutLine: async (line) => {
+      await streamCommandOutput(deploymentId, line);
+    },
+    onStderrLine: async (line) => {
+      await streamCommandOutput(deploymentId, line);
+    }
+  });
+}
+
 async function cloneRepository({
+  deploymentId,
   repoUrl,
   accessToken,
   branch,
   destination
 }: {
+  deploymentId: string;
   repoUrl: string;
   accessToken: string;
   branch: string;
@@ -88,26 +111,28 @@ async function cloneRepository({
   const cloneArgs = ["clone", "--depth", "1", "--branch", branch];
 
   try {
-    await runCommand("git", [...cloneArgs, createAuthenticatedRepoUrl(repoUrl, accessToken), destination]);
-  } catch {
-    await runCommand("git", [...cloneArgs, createPublicRepoCloneUrl(repoUrl), destination]);
-  }
-}
+    await runDeploymentCommand({
+      deploymentId,
+      command: "git",
+      args: [...cloneArgs, createAuthenticatedRepoUrl(repoUrl, accessToken), destination]
+    });
+  } catch (error) {
+    await appendDeploymentLogLine({
+      deploymentId,
+      text: "Falling back to public GitHub clone URL.",
+      level: "warn"
+    });
 
-async function updateDeployment(
-  deploymentId: string,
-  status: DeploymentStatus,
-  data: Record<string, unknown> = {}
-) {
-  await prisma.deployment.update({
-    where: {
-      id: deploymentId
-    },
-    data: {
-      status,
-      ...data
+    await runDeploymentCommand({
+      deploymentId,
+      command: "git",
+      args: [...cloneArgs, createPublicRepoCloneUrl(repoUrl), destination]
+    });
+
+    if (error instanceof Error) {
+      console.warn("Authenticated clone failed; public clone fallback succeeded.", error);
     }
-  });
+  }
 }
 
 async function cleanupDockerArtifacts({
@@ -171,16 +196,18 @@ async function deactivatePreviousDeployments(projectId: string, currentDeploymen
       imageTag: deployment.imageTag
     });
 
-    await prisma.deployment.update({
-      where: {
-        id: deployment.id
-      },
-      data: {
-        status: "STOPPED",
-        completedAt: deployment.completedAt ?? now
-      }
+    await updateDeploymentStatus(deployment.id, "STOPPED", {
+      completedAt: deployment.completedAt ?? now
     });
   }
+}
+
+async function getLatestCommitMessage(repositoryDirectory: string) {
+  const result = await runCommand("git", ["log", "-1", "--pretty=%s"], {
+    cwd: repositoryDirectory
+  });
+
+  return result.stdout.trim() || null;
 }
 
 export async function processDeploymentJob({ deploymentId }: DeploymentJobData) {
@@ -213,17 +240,30 @@ export async function processDeploymentJob({ deploymentId }: DeploymentJobData) 
       imageTag
     });
 
-    await updateDeployment(deployment.id, "CLONING", {
+    await appendDeploymentLogLine({
+      deploymentId: deployment.id,
+      text: `Preparing deployment for ${deployment.project.name}.`
+    });
+
+    await updateDeploymentStatus(deployment.id, "CLONING", {
       startedAt: new Date(),
       completedAt: null,
       errorMessage: null,
+      aiAnalysis: null,
       previewUrl: null,
       previewPort: null,
       imageTag,
-      containerId: null
+      containerId: null,
+      sourceBranch: deployment.sourceBranch ?? deployment.project.branch
+    });
+
+    await appendDeploymentLogLine({
+      deploymentId: deployment.id,
+      text: `Cloning ${deployment.project.repoName} from branch ${deployment.project.branch}.`
     });
 
     await cloneRepository({
+      deploymentId: deployment.id,
       repoUrl: deployment.project.repoUrl,
       accessToken: deployment.project.user.accessToken,
       branch: deployment.project.branch,
@@ -233,10 +273,22 @@ export async function processDeploymentJob({ deploymentId }: DeploymentJobData) 
     const revision = await runCommand("git", ["rev-parse", "HEAD"], {
       cwd: repositoryDirectory
     });
+    const sourceCommitSha = revision.stdout.trim() || null;
+    const commitMessage = await getLatestCommitMessage(repositoryDirectory);
 
-    await updateDeployment(deployment.id, "DETECTING", {
-      sourceCommitSha: revision.stdout.trim()
+    await updateDeploymentStatus(deployment.id, "DETECTING", {
+      sourceCommitSha,
+      sourceBranch: deployment.project.branch,
+      commitMessage
     });
+
+    if (sourceCommitSha) {
+      await appendDeploymentLogLine({
+        deploymentId: deployment.id,
+        text: `Resolved commit ${sourceCommitSha.slice(0, 7)}${commitMessage ? ` - ${commitMessage}` : ""}.`,
+        level: "success"
+      });
+    }
 
     const buildPlan = await detectBuildPlan({
       repositoryRoot: repositoryDirectory,
@@ -263,37 +315,60 @@ export async function processDeploymentJob({ deploymentId }: DeploymentJobData) 
       })
     ]);
 
+    await appendDeploymentLogLine({
+      deploymentId: deployment.id,
+      text: `Detected ${buildPlan.framework} build plan in ${buildPlan.workingDirectory}.`,
+      level: "success"
+    });
+
     const dockerfilePath = path.join(repositoryDirectory, ".launchpad.Dockerfile");
     await writeFile(dockerfilePath, createDockerfile(buildPlan), "utf8");
 
-    await updateDeployment(deployment.id, "BUILDING");
+    await updateDeploymentStatus(deployment.id, "BUILDING", {
+      framework: buildPlan.framework
+    });
 
-    await runCommand("docker", [
-      "build",
-      "-f",
-      dockerfilePath,
-      "-t",
-      imageTag,
-      "--label",
-      "launchpad.managed=true",
-      "--label",
-      `launchpad.projectId=${deployment.projectId}`,
-      "--label",
-      `launchpad.deploymentId=${deployment.id}`,
-      repositoryDirectory
-    ]);
+    await appendDeploymentLogLine({
+      deploymentId: deployment.id,
+      text: "Starting Docker build."
+    });
+
+    await runDeploymentCommand({
+      deploymentId: deployment.id,
+      command: "docker",
+      args: [
+        "build",
+        "-f",
+        dockerfilePath,
+        "-t",
+        imageTag,
+        "--label",
+        "launchpad.managed=true",
+        "--label",
+        `launchpad.projectId=${deployment.projectId}`,
+        "--label",
+        `launchpad.deploymentId=${deployment.id}`,
+        repositoryDirectory
+      ]
+    });
 
     const previewPort = await allocatePreviewPort();
     const previewUrl = createPreviewUrl(previewPort);
 
-    await updateDeployment(deployment.id, "STARTING", {
+    await updateDeploymentStatus(deployment.id, "STARTING", {
       previewPort,
       previewUrl
+    });
+
+    await appendDeploymentLogLine({
+      deploymentId: deployment.id,
+      text: `Starting preview container on ${previewUrl}.`
     });
 
     const dockerRunArgs = [
       "run",
       "-d",
+      "--rm",
       "--name",
       containerName,
       "--label",
@@ -303,9 +378,9 @@ export async function processDeploymentJob({ deploymentId }: DeploymentJobData) 
       "--label",
       `launchpad.deploymentId=${deployment.id}`,
       "-p",
-      `${previewPort}:3000`,
+      `${previewPort}:${buildPlan.containerPort}`,
       "-e",
-      "PORT=3000"
+      `PORT=${buildPlan.containerPort}`
     ];
 
     for (const envVar of deployment.project.envVars) {
@@ -314,50 +389,68 @@ export async function processDeploymentJob({ deploymentId }: DeploymentJobData) 
 
     dockerRunArgs.push(imageTag);
 
-    const container = await runCommand("docker", dockerRunArgs);
+    const container = await runDeploymentCommand({
+      deploymentId: deployment.id,
+      command: "docker",
+      args: dockerRunArgs
+    });
     const containerId = container.stdout.trim();
 
     await deactivatePreviousDeployments(deployment.projectId, deployment.id);
 
-    await prisma.$transaction([
-      prisma.deployment.update({
-        where: {
-          id: deployment.id
-        },
-        data: {
-          status: "READY",
-          containerId,
-          completedAt: new Date()
-        }
-      }),
-      prisma.project.update({
-        where: {
-          id: deployment.projectId
-        },
-        data: {
-          liveUrl: previewUrl
-        }
-      })
-    ]);
+    await updateDeploymentStatus(deployment.id, "READY", {
+      containerId,
+      completedAt: new Date()
+    });
+
+    await prisma.project.update({
+      where: {
+        id: deployment.projectId
+      },
+      data: {
+        liveUrl: previewUrl
+      }
+    });
+
+    await appendDeploymentLogLine({
+      deploymentId: deployment.id,
+      text: `Deployment ready at ${previewUrl}.`,
+      level: "success"
+    });
   } catch (error) {
+    const errorMessage = getDeploymentErrorMessage(error);
+
     await cleanupDockerArtifacts({
       containerName,
       imageTag
     });
 
-    await prisma.deployment.update({
-      where: {
-        id: deployment.id
-      },
-      data: {
-        status: "FAILED",
-        errorMessage: getDeploymentErrorMessage(error),
-        completedAt: new Date(),
-        previewUrl: null,
-        previewPort: null,
-        containerId: null
-      }
+    await appendDeploymentLogLine({
+      deploymentId: deployment.id,
+      text: errorMessage,
+      level: "error"
     });
+
+    await updateDeploymentStatus(deployment.id, "FAILED", {
+      errorMessage,
+      completedAt: new Date(),
+      previewUrl: null,
+      previewPort: null,
+      containerId: null
+    });
+
+    const analysis = await analyzeFailure(deployment.id, deployment.project.name);
+
+    if (analysis) {
+      await prisma.deployment.update({
+        where: {
+          id: deployment.id
+        },
+        data: {
+          aiAnalysis: analysis
+        }
+      });
+    }
   } finally {
     await rm(temporaryDirectory, {
       recursive: true,

@@ -23,6 +23,29 @@ export type EnvVarDto = {
   projectId: string;
 };
 
+export const BUILD_LOG_LEVELS = ["info", "success", "error", "warn"] as const;
+
+export type BuildLogLevel = (typeof BUILD_LOG_LEVELS)[number];
+
+export type BuildLogLineDto = {
+  timestamp: string;
+  text: string;
+  level: BuildLogLevel;
+};
+
+export type WebhookInfoDto = {
+  webhookUrl: string;
+  webhookSecret: string;
+  events: string[];
+};
+
+export type FailureAnalysisDto = {
+  summary: string;
+  cause: string;
+  fix: string;
+  severity: "low" | "medium" | "high";
+};
+
 export const DEPLOYMENT_STATUSES = [
   "QUEUED",
   "CLONING",
@@ -42,8 +65,11 @@ export type DeploymentDto = {
   previewUrl: string | null;
   previewPort: number | null;
   framework: string;
+  sourceBranch: string | null;
   sourceCommitSha: string | null;
+  commitMessage: string | null;
   errorMessage: string | null;
+  aiAnalysis: string | null;
   createdAt: string;
   updatedAt: string;
   startedAt: string | null;
@@ -76,6 +102,9 @@ export type GithubRepoDto = {
   url: string;
   defaultBranch: string;
   private: boolean;
+  description: string | null;
+  language: string | null;
+  stargazerCount: number;
   updatedAt: string;
 };
 
@@ -106,9 +135,44 @@ export type CreateDeploymentInput = {
   rebuild?: boolean;
 };
 
+export type AnalyticsDailyDeploymentDto = {
+  date: string;
+  total: number;
+  success: number;
+};
+
+export type AnalyticsDurationPerProjectDto = {
+  project: string;
+  avgDuration: number;
+};
+
+export type AnalyticsStatusBreakdownDto = {
+  status: DeploymentStatus;
+  count: number;
+};
+
+export type AnalyticsRecentDeploymentDto = DeploymentDto & {
+  projectName: string;
+  branch: string;
+  duration: number | null;
+};
+
+export type AnalyticsDto = {
+  totalDeployments: number;
+  successRate: number;
+  avgBuildDuration: number;
+  activeProjects: number;
+  deploymentsPerDay: AnalyticsDailyDeploymentDto[];
+  durationPerProject: AnalyticsDurationPerProjectDto[];
+  statusBreakdown: AnalyticsStatusBreakdownDto[];
+  recentDeployments: AnalyticsRecentDeploymentDto[];
+};
+
 export const FRAMEWORK_OPTIONS = [
-  { label: "Other", value: "other" },
+  { label: "Auto-detect", value: "other" },
   { label: "Next.js", value: "nextjs" },
   { label: "React", value: "react" },
-  { label: "Node.js", value: "node" }
+  { label: "Python", value: "python" },
+  { label: "Node.js", value: "node" },
+  { label: "Static", value: "static" }
 ] as const;

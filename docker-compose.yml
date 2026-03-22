@@ -17,7 +17,15 @@ services:
       - "6379:6379"
     volumes:
       - redis-data:/data
+  mongodb:
+    image: mongo:7
+    container_name: launchpad-mongodb
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
 
 volumes:
   postgres-data:
   redis-data:
+  mongo_data:

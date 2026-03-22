@@ -14,12 +14,16 @@
     "@radix-ui/react-slot": "^1.1.1",
     "@tanstack/react-query": "^5.62.7",
     "axios": "^1.7.9",
+    "canvas-confetti": "^1.9.3",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^0.468.0",
     "next": "^14.2.0",
     "react": "18.2.0",
     "react-dom": "18.2.0",
+    "recharts": "^2.15.0",
+    "socket.io-client": "^4.8.1",
+    "sonner": "^2.0.1",
     "tailwind-merge": "^2.6.0"
   },
   "devDependencies": {

@@ -6,6 +6,8 @@ import { asyncHandler } from "../lib/async-handler";
 import { ApiError } from "../lib/api-error";
 import { authenticateRequest } from "../middleware/auth";
 import { enqueueDeploymentJob } from "../queues/deployments";
+import { createDeploymentRecord, updateDeploymentStatus } from "../services/deployments/records";
+import { getDeploymentLogs } from "../services/deployments/logs";
 import {
   findOwnedDeployment,
   findOwnedProjectWithDeploymentAccess,
@@ -45,11 +47,10 @@ projectDeploymentsRouter.post(
     const projectId = String(req.params.id);
     const project = await findOwnedProjectWithDeploymentAccess(projectId, req.user.id);
 
-    const deployment = await prisma.deployment.create({
-      data: {
-        projectId: project.id,
-        framework: project.framework
-      }
+    const deployment = await createDeploymentRecord({
+      projectId: project.id,
+      framework: project.framework,
+      sourceBranch: project.branch
     });
 
     try {
@@ -57,15 +58,9 @@ projectDeploymentsRouter.post(
         deploymentId: deployment.id
       });
     } catch (error) {
-      await prisma.deployment.update({
-        where: {
-          id: deployment.id
-        },
-        data: {
-          status: "FAILED",
-          errorMessage: "Launchpad could not enqueue this deployment. Check Redis and the worker process.",
-          completedAt: new Date()
-        }
+      await updateDeploymentStatus(deployment.id, "FAILED", {
+        errorMessage: "Launchpad could not enqueue this deployment. Check Redis and the worker process.",
+        completedAt: new Date()
       });
 
       throw new ApiError(
@@ -84,6 +79,50 @@ projectDeploymentsRouter.post(
 export const deploymentsRouter: Router = createRouter();
 
 deploymentsRouter.use(authenticateRequest);
+
+deploymentsRouter.get(
+  "/",
+  asyncHandler(async (req, res) => {
+    const deployments = await prisma.deployment.findMany({
+      where: {
+        project: {
+          userId: req.user.id
+        }
+      },
+      include: {
+        project: true
+      },
+      orderBy: {
+        createdAt: "desc"
+      },
+      take: 50
+    });
+
+    return res.json({
+      data: deployments.map((deployment) => ({
+        ...toDeploymentDto(deployment),
+        projectName: deployment.project.name,
+        branch: deployment.sourceBranch ?? deployment.project.branch,
+        duration:
+          deployment.startedAt && deployment.completedAt
+            ? deployment.completedAt.getTime() - deployment.startedAt.getTime()
+            : null
+      }))
+    });
+  })
+);
+
+deploymentsRouter.get(
+  "/:deploymentId/logs",
+  asyncHandler(async (req, res) => {
+    const deploymentId = String(req.params.deploymentId);
+    await findOwnedDeployment(deploymentId, req.user.id);
+
+    return res.json({
+      data: await getDeploymentLogs(deploymentId)
+    });
+  })
+);
 
 deploymentsRouter.get(
   "/:deploymentId",

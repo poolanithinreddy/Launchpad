@@ -1,4 +1,7 @@
 import type {
+  AnalyticsDto,
+  AnalyticsRecentDeploymentDto,
+  BuildLogLineDto,
   CreateEnvVarInput,
   DeploymentDto,
   CreateProjectInput,
@@ -6,7 +9,8 @@ import type {
   GithubRepoDto,
   ProjectDto,
   SessionUser,
-  UpdateProjectInput
+  UpdateProjectInput,
+  WebhookInfoDto
 } from "@launchpad/types";
 
 import { apiClient, unwrapData } from "@/lib/api-client";
@@ -75,10 +79,57 @@ export function getGithubRepos() {
   return unwrapData<GithubRepoDto[]>(apiClient.get("/api/github/repos"));
 }
 
+export function getGithubReposPage({
+  page,
+  perPage = 30
+}: {
+  page: number;
+  perPage?: number;
+}) {
+  return unwrapData<GithubRepoDto[]>(
+    apiClient.get("/api/github/repos", {
+      params: {
+        page,
+        perPage
+      }
+    })
+  );
+}
+
 export function getProjectDeployments(projectId: string) {
   return unwrapData<DeploymentDto[]>(apiClient.get(`/api/projects/${projectId}/deployments`));
 }
 
 export function createDeployment(projectId: string) {
   return unwrapData<DeploymentDto>(apiClient.post(`/api/projects/${projectId}/deployments`));
+}
+
+export function getDeployment(deploymentId: string) {
+  return unwrapData<DeploymentDto>(apiClient.get(`/api/deployments/${deploymentId}`));
+}
+
+export function getDeploymentLogs(deploymentId: string) {
+  return unwrapData<BuildLogLineDto[]>(apiClient.get(`/api/deployments/${deploymentId}/logs`));
+}
+
+export function getDeployments() {
+  return unwrapData<AnalyticsRecentDeploymentDto[]>(apiClient.get("/api/deployments"));
+}
+
+export function getAnalytics(days = 30) {
+  return unwrapData<AnalyticsDto>(
+    apiClient.get("/api/analytics", {
+      params: {
+        days
+      }
+    })
+  );
+}
+
+export function getWebhookInfo(projectId: string) {
+  return unwrapData<WebhookInfoDto>(apiClient.get(`/api/projects/${projectId}/webhook-info`));
+}
+
+export function rotateWebhookSecret(projectId: string) {
+  return unwrapData<WebhookInfoDto>(apiClient.put(`/api/projects/${projectId}/webhook-secret`));
 }

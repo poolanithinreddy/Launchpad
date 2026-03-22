@@ -1,4 +1,7 @@
 import { createDeploymentWorker } from "./queues/deployments";
+import { connectToMongo } from "./lib/mongoose";
+
+void connectToMongo();
 
 const worker = createDeploymentWorker();
 
